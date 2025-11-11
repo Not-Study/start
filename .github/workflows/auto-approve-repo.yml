@@ -1,0 +1,208 @@
+name: Auto Approve Repository
+
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [labeled]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  approve-repo:
+    if: contains(github.event.issue.labels.*.name, 'repository-request')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check approval
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { issue, comment, payload } = context;
+            let approved = false;
+
+            // 检查标签
+            if (payload.action === 'labeled' && payload.label?.name === 'approved') {
+              approved = true;
+            }
+
+            // 检查评论
+            if (payload.action === 'created' && comment) {
+              const body = comment.body.toLowerCase().trim();
+              const user = comment.user.login;
+
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: user
+              });
+
+              if (['admin', 'maintain'].includes(data.permission) &&
+                  (body === '/approve' || body.startsWith('/approve '))) {
+                approved = true;
+              }
+            }
+
+            core.setOutput('approved', approved);
+
+      - name: Parse info
+        if: steps.check.outputs.approved == 'true'
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body;
+
+            const userMatch = body.match(/###\s*GitHub\s*用户名\s*\n+([^\n#]+)/i);
+            const username = userMatch?.[1]?.trim();
+
+            const repoMatch = body.match(/###\s*期望的仓库名称[\s\S]*?not-study-([^\n\s]+)/i);
+            const repoSuffix = repoMatch?.[1]?.trim() || username;
+            const repoName = `not-study-${repoSuffix}`;
+
+            const descMatch = body.match(/###\s*仓库描述\s*\n+([^\n#]+)/i);
+            const description = descMatch?.[1]?.trim() || `${username} 的学习打卡仓库`;
+
+            if (!username) {
+              core.setFailed('无法提取用户名');
+              return;
+            }
+
+            core.setOutput('username', username);
+            core.setOutput('repo_name', repoName);
+            core.setOutput('description', description);
+
+      - name: Add comment
+        if: steps.check.outputs.approved == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const username = '${{ steps.parse.outputs.username }}';
+            const repo = '${{ steps.parse.outputs.repo_name }}';
+            const org = context.repo.owner;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `**处理中**\n\n正在为 @${username} 创建仓库 \`${repo}\`。\n\n**手动操作步骤**:\n\n1. 访问 [创建仓库](https://github.com/orgs/${org}/repositories/new)\n2. 仓库名: \`${repo}\`\n3. 设为 Public，勾选 Add a README\n4. 创建后添加 @${username} 为 Collaborator (Write 权限)\n\n完成后关闭此 Issue。\n\n---\n\n启用完全自动化请参考文档配置 PAT Token。`
+            });
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              labels: ['processing']
+            });
+
+  auto-create:
+    if: |
+      contains(github.event.issue.labels.*.name, 'repository-request') &&
+      contains(github.event.issue.labels.*.name, 'approved') &&
+      vars.AUTO_CREATE_REPO_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse info
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body;
+
+            const userMatch = body.match(/###\s*GitHub\s*用户名\s*\n+([^\n#]+)/i);
+            const username = userMatch?.[1]?.trim();
+
+            const repoMatch = body.match(/###\s*期望的仓库名称[\s\S]*?not-study-([^\n\s]+)/i);
+            const repoName = `not-study-${repoMatch?.[1]?.trim() || username}`;
+
+            const descMatch = body.match(/###\s*仓库描述\s*\n+([^\n#]+)/i);
+            const description = descMatch?.[1]?.trim() || `${username} 的学习打卡仓库`;
+
+            core.setOutput('username', username);
+            core.setOutput('repo_name', repoName);
+            core.setOutput('description', description);
+
+      - name: Create repository
+        if: steps.parse.outputs.username != ''
+        env:
+          TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
+          REPO: ${{ steps.parse.outputs.repo_name }}
+          DESC: ${{ steps.parse.outputs.description }}
+          ORG: ${{ github.repository_owner }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "创建仓库 $REPO..."
+
+            curl -X POST \
+              -H "Authorization: token $TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/orgs/$ORG/repos" \
+              -d "{\"name\":\"$REPO\",\"description\":\"$DESC\",\"private\":false,\"auto_init\":true}" \
+              > /tmp/repo.json
+
+            if grep -q "\"full_name\"" /tmp/repo.json; then
+              echo "CREATED=true" >> $GITHUB_ENV
+            else
+              echo "CREATED=false" >> $GITHUB_ENV
+            fi
+          fi
+
+      - name: Add collaborator
+        if: env.CREATED == 'true'
+        env:
+          TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
+          REPO: ${{ steps.parse.outputs.repo_name }}
+          USER: ${{ steps.parse.outputs.username }}
+          ORG: ${{ github.repository_owner }}
+        run: |
+          sleep 3
+          curl -X PUT \
+            -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$ORG/$REPO/collaborators/$USER" \
+            -d '{"permission":"push"}'
+
+      - name: Complete
+        if: env.CREATED == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const username = '${{ steps.parse.outputs.username }}';
+            const repo = '${{ steps.parse.outputs.repo_name }}';
+            const org = context.repo.owner;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `**已完成**\n\n已为 @${username} 创建仓库。\n\n- 地址: https://github.com/${org}/${repo}\n- 权限: Write\n\n可以开始学习打卡了！`
+            });
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              state: 'closed'
+            });
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              labels: ['completed']
+            });
+
+      - name: Handle failure
+        if: env.CREATED == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `**创建失败**\n\n可能原因:\n- Token 权限不足\n- 仓库名已存在\n- API 限制\n\n请手动处理。`
+            });

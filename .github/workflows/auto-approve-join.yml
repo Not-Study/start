@@ -1,0 +1,148 @@
+name: Auto Approve Join
+
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [labeled]
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  approve-join:
+    if: contains(github.event.issue.labels.*.name, 'join-request')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check approval
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { issue, comment, payload } = context;
+            let approved = false;
+
+            // 检查标签
+            if (payload.action === 'labeled' && payload.label?.name === 'approved') {
+              approved = true;
+            }
+
+            // 检查评论
+            if (payload.action === 'created' && comment) {
+              const body = comment.body.toLowerCase().trim();
+              const user = comment.user.login;
+
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                username: user
+              });
+
+              if (['admin', 'maintain'].includes(data.permission) &&
+                  (body === '/approve' || body.startsWith('/approve '))) {
+                approved = true;
+              }
+            }
+
+            core.setOutput('approved', approved);
+
+      - name: Parse username
+        if: steps.check.outputs.approved == 'true'
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body;
+            const match = body.match(/###\s*GitHub\s*用户名\s*\n+([^\n#]+)/i);
+            const username = match?.[1]?.trim();
+
+            if (!username) {
+              core.setFailed('无法提取用户名');
+              return;
+            }
+
+            core.setOutput('username', username);
+
+      - name: Add comment
+        if: steps.check.outputs.approved == 'true'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const username = '${{ steps.parse.outputs.username }}';
+            const org = context.repo.owner;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `**处理中**\n\n正在为 @${username} 处理加入申请。\n\n**手动操作步骤**:\n1. 访问 [组织成员页面](https://github.com/orgs/${org}/people)\n2. 点击 Invite member\n3. 输入: \`${username}\`\n4. 发送邀请\n\n完成后关闭此 Issue。\n\n---\n\n启用完全自动化请参考文档配置 PAT Token。`
+            });
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              labels: ['processing']
+            });
+
+  auto-invite:
+    if: |
+      contains(github.event.issue.labels.*.name, 'join-request') &&
+      contains(github.event.issue.labels.*.name, 'approved') &&
+      vars.AUTO_INVITE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse username
+        id: parse
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.issue.body;
+            const match = body.match(/###\s*GitHub\s*用户名\s*\n+([^\n#]+)/i);
+            core.setOutput('username', match?.[1]?.trim() || '');
+
+      - name: Invite user
+        if: steps.parse.outputs.username != ''
+        env:
+          TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
+          USERNAME: ${{ steps.parse.outputs.username }}
+          ORG: ${{ github.repository_owner }}
+        run: |
+          if [ -n "$TOKEN" ]; then
+            echo "邀请用户 $USERNAME..."
+            curl -X PUT \
+              -H "Authorization: token $TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/orgs/$ORG/memberships/$USERNAME" \
+              -d '{"role":"member"}'
+          fi
+
+      - name: Complete
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const username = '${{ steps.parse.outputs.username }}';
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `**已完成**\n\n已向 @${username} 发送组织邀请。\n\n请提醒用户接受邀请，如需学习仓库可提交新的申请。`
+            });
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              state: 'closed'
+            });
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              labels: ['completed']
+            });

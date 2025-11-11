@@ -1,0 +1,127 @@
+name: Daily Study Stats
+
+on:
+  schedule:
+    # 每天 UTC 时间 16:00 运行 (北京时间 00:00)
+    - cron: "0 16 * * *"
+  workflow_dispatch: # 允许手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  collect-stats:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Collect commit statistics
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ORG_NAME: ${{ github.repository_owner }}
+        run: |
+          # 创建今天的日期文件夹
+          DATE=$(date -u -d '-8 hours' +%Y-%m-%d)
+          RECORD_DIR="records/${DATE}"
+          mkdir -p "${RECORD_DIR}"
+
+          echo "# 学习打卡统计" > "${RECORD_DIR}/README.md"
+          echo "" >> "${RECORD_DIR}/README.md"
+          echo "**日期**: ${DATE}" >> "${RECORD_DIR}/README.md"
+          echo "" >> "${RECORD_DIR}/README.md"
+          echo "## 打卡情况" >> "${RECORD_DIR}/README.md"
+          echo "" >> "${RECORD_DIR}/README.md"
+
+          # 获取组织下所有仓库
+          echo "正在获取组织 ${ORG_NAME} 的仓库列表..."
+          repos=$(curl -s -H "Authorization: token ${GITHUB_TOKEN}" \
+            "https://api.github.com/orgs/${ORG_NAME}/repos?per_page=100" | \
+            jq -r '.[].name' | grep "^not-study-" || true)
+
+          if [ -z "$repos" ]; then
+            echo "未找到符合命名规范的学习仓库" >> "${RECORD_DIR}/README.md"
+            echo "⚠️ 未找到任何 not-study-* 仓库"
+          else
+            echo "| 仓库 | 用户 | 提交数 | 提交信息 |" >> "${RECORD_DIR}/README.md"
+            echo "|------|------|--------|----------|" >> "${RECORD_DIR}/README.md"
+
+            total_commits=0
+            active_users=0
+            total_repos=$(echo "$repos" | wc -l)
+
+            # 计算今天的开始和结束时间 (UTC-8 北京时间)
+            START_TIME=$(date -u -d "${DATE} 00:00:00 +8 hours" --iso-8601=seconds)
+            END_TIME=$(date -u -d "${DATE} 23:59:59 +8 hours" --iso-8601=seconds)
+
+            for repo in $repos; do
+              echo "正在处理仓库: ${repo}"
+              username="${repo#not-study-}"
+
+              # 获取今天的 commits
+              commits=$(curl -s -H "Authorization: token ${GITHUB_TOKEN}" \
+                "https://api.github.com/repos/${ORG_NAME}/${repo}/commits?since=${START_TIME}&until=${END_TIME}" | \
+                jq -r '.[] | "\(.commit.message | split("\n")[0])"' || echo "")
+
+              commit_count=$(echo "$commits" | grep -c "." || echo "0")
+              if [ -z "$commits" ] || [ "$commits" = "" ]; then
+                commit_count=0
+              fi
+
+              if [ $commit_count -gt 0 ]; then
+                active_users=$((active_users + 1))
+                total_commits=$((total_commits + commit_count))
+
+                # 获取提交详情，用顿号分隔
+                commit_details=$(echo "$commits" | head -3 | tr '\n' '、' | sed 's/、$//')
+                if [ -z "$commit_details" ]; then
+                  commit_details="无详情"
+                fi
+                # 如果超过3条，添加省略号
+                if [ $commit_count -gt 3 ]; then
+                  commit_details="${commit_details}..."
+                fi
+
+                echo "| [${repo}](https://github.com/${ORG_NAME}/${repo}) | ${username} | ${commit_count} | ${commit_details} |" >> "${RECORD_DIR}/README.md"
+
+                # 保存详细的 JSON 数据
+                curl -s -H "Authorization: token ${GITHUB_TOKEN}" \
+                  "https://api.github.com/repos/${ORG_NAME}/${repo}/commits?since=${START_TIME}&until=${END_TIME}" \
+                  > "${RECORD_DIR}/${repo}.json"
+              else
+                echo "| [${repo}](https://github.com/${ORG_NAME}/${repo}) | ${username} | 0 | 未打卡 |" >> "${RECORD_DIR}/README.md"
+              fi
+            done
+
+            echo "" >> "${RECORD_DIR}/README.md"
+            echo "## 统计摘要" >> "${RECORD_DIR}/README.md"
+            echo "" >> "${RECORD_DIR}/README.md"
+            echo "- 总仓库数: ${total_repos}" >> "${RECORD_DIR}/README.md"
+            echo "- 打卡人数: ${active_users}" >> "${RECORD_DIR}/README.md"
+            echo "- 总提交数: ${total_commits}" >> "${RECORD_DIR}/README.md"
+          fi
+
+          echo "" >> "${RECORD_DIR}/README.md"
+          echo "---" >> "${RECORD_DIR}/README.md"
+          echo "" >> "${RECORD_DIR}/README.md"
+          echo "_统计时间: ${DATE} 00:00 (UTC+8)_" >> "${RECORD_DIR}/README.md"
+
+      - name: Commit and push statistics
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          git add records/
+
+          if git diff --staged --quiet; then
+            echo "没有新的统计数据"
+          else
+            DATE=$(date -u -d '-8 hours' +%Y-%m-%d)
+            git commit -m "📊 ${DATE}"
+            git push
+          fi
