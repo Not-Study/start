@@ -1,6 +1,10 @@
 # Not Study
 
-![start](https://socialify.git.ci/not-study/start/image?custom_description=%E5%AD%A6%E4%B9%A0+%E4%B8%BA%E4%BB%80%E4%B9%88%E4%B8%8D%E5%AD%A6&description=1&issues=1&logo=https%3A%2F%2Fimage.dogxi.me%2Fi%2F2025%2F11%2F11%2F%E7%8B%97%E5%A4%B4.png.webp&name=1&owner=1&pulls=1&stargazers=1&theme=Light)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./banner/banner-dark.webp">
+  <source media="(prefers-color-scheme: light)" srcset="./banner/banner-light.webp">
+  <img alt="zzuli-developers" src="./banner/banner-light.webp">
+</picture>
 
 一个专注于学习打卡的组织。
 
