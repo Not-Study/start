@@ -1,10 +1,14 @@
-# Not Study
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./banner/banner-dark.webp">
   <source media="(prefers-color-scheme: light)" srcset="./banner/banner-light.webp">
   <img alt="zzuli-developers" src="./banner/banner-light.webp">
 </picture>
+
+![view](https://komarev.com/ghpvc/?username=notstudy&abbreviated=true)
+![GitHub Org's stars](https://img.shields.io/github/stars/not-study?style=flat)
+![GitHub Issues or Pull Requests](https://img.shields.io/github/issues-closed/not-study/start?style=flat)
+
+# Not Study
 
 一个专注于学习打卡的组织。
 
