@@ -36,8 +36,8 @@
 
 ### 启用完全自动化
 
-需要配置 Personal Access Token，详见 [.github/README.md](./.github/README.md)
+需要配置 Personal Access Token，详见 [.github/Configure.md](./.github/Configure.md)
 
 ---
 
-**Not Study?!** 🎓
+**Not Study!** 🎓
