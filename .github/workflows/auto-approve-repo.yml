@@ -63,8 +63,14 @@ jobs:
             const repoSuffix = repoMatch?.[1]?.trim() || username;
             const repoName = `not-study-${repoSuffix}`;
 
-            const descMatch = body.match(/###\s*仓库描述\s*\n+([^\n#]+)/i);
-            const description = descMatch?.[1]?.trim() || `${username} 的学习打卡仓库`;
+            const descMatch = body.match(/###\s*仓库描述\s*\n+([\s\S]*?)(?=###|---|\n##|$)/i);
+            let description = descMatch?.[1]?.trim() || '';
+            // 过滤掉 HTML 注释
+            description = description.replace(/<!--[\s\S]*?-->/g, '').trim();
+            // 如果为空或仅包含"可选"，使用默认值
+            if (!description || description === '可选') {
+              description = `Welcome ${username}`;
+            }
 
             if (!username) {
               core.setFailed('无法提取用户名');
@@ -118,8 +124,14 @@ jobs:
             const repoMatch = body.match(/###\s*期望的仓库名称[\s\S]*?not-study-([^\n\s]+)/i);
             const repoName = `not-study-${repoMatch?.[1]?.trim() || username}`;
 
-            const descMatch = body.match(/###\s*仓库描述\s*\n+([^\n#]+)/i);
-            const description = descMatch?.[1]?.trim() || `${username} 的学习打卡仓库`;
+            const descMatch = body.match(/###\s*仓库描述\s*\n+([\s\S]*?)(?=###|---|\n##|$)/i);
+            let description = descMatch?.[1]?.trim() || '';
+            // 过滤掉 HTML 注释
+            description = description.replace(/<!--[\s\S]*?-->/g, '').trim();
+            // 如果为空或仅包含"可选"，使用默认值
+            if (!description || description === '可选') {
+              description = `Welcome ${username}`;
+            }
 
             core.setOutput('username', username);
             core.setOutput('repo_name', repoName);
